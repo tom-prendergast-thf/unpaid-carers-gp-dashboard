@@ -16,7 +16,7 @@ if (any(installed_packages == FALSE)){
   install.packages(packages[!installed_packages])
 }
 
-lapply(packages, library)
+lapply(packages, library, character.only = TRUE)
 
 ####################
 ##### TO DO ########
@@ -44,18 +44,20 @@ hex_map <- s3read_using(read_sf,
               bucket = bucket)
 
 all_variables_renamed <- all_variables_joined %>%
-  rename(`Total number of unpaid carers (census)` = CENSUS_NO_OF_CARERS,
+  rename(`Difference (number of unpaid carers)`= Difference,
+    `Total number of unpaid carers (census)` = CENSUS_NO_OF_CARERS,
          `Estimated number of unpaid carers (GP data)` = EST_CARERS_IN_LA,
     `Number of patients registered to missing practices` = MISSING_PATIENTS, 
          `Proportion of households subject to 1+ dimensions of deprivation` = PERCENT_DEPRIVATION, 
          `Proportion of carers who are female` = prop_female,
          `Proportion of carers over 65` = prop_over65,
-         `Proportio of carers under 25` = prop_under25, 
+         `Proportion of carers under 25` = prop_under25, 
          `Proportion of carers giving over 50 hours of care per week` = prop_over50hours, 
          `Proportion of carers giving under 9 hours of care per week` = prop_lowintensity)
 
 map_variables_renamed <- map %>%
-  rename(`Number of patients registered to missing practices` = MISSING_PATIENTS, 
+  rename(`Difference (number of unpaid carers)`= Difference,
+    `Number of patients registered to missing practices` = MISSING_PATIENTS, 
          `Proportion of households subject to 1+ dimensions of deprivation` = PERCENT_DEPRIVATION, 
          `Proportion of carers who are female` = prop_female,
          `Proportion of carers over 65` = prop_over65,
@@ -83,7 +85,7 @@ ui <-
   dashboardPage(skin = 'red',
 
     # Application title
-    dashboardHeader(title = "GP contract data: unpaid carers"),
+    dashboardHeader(title = "GP contract data"),
 
     # Initial sidebar
     dashboardSidebar(sidebarMenu(
@@ -140,7 +142,7 @@ ui <-
                       
                       selectInput(inputId = 'y_variable',
                                   label = "Y variable: ",
-                                  choices = list('Coverage', 'Difference'))
+                                  choices = list('Coverage', 'Difference (number of unpaid carers)'))
                     ),
                     
                     # Show a plot of the selected variables
@@ -155,7 +157,7 @@ ui <-
                 fluidRow(column(3, 
                                 selectInput(inputId = 'hist_variable',
                                             label = "Histogram variable: ",
-                                            choices = list('Coverage', 'Difference', 'Total number of unpaid carers (census)',
+                                            choices = list('Coverage', 'Difference (number of unpaid carers', 'Total number of unpaid carers (census)',
                                                            'Estimated number of unpaid carers (GP data)',
                                                            'Number of patients registered to missing practices', 
                                                            'Proportion of households subject to 1+ dimensions of deprivation', 
@@ -411,7 +413,7 @@ hex_map_popup <- reactive({
                            '\n',  input$y_variable, ': ', round(df[,2], 2),
                            #'\n',  input$x_variable, ': ', 
                            '\nx-value: ', round(df[,1], 2))
-        } else if (input$y_variable == 'Difference'){
+        } else if (input$y_variable == 'Difference (number of unpaid carers)'){
           df$tooltips <- paste0(df$LA_NAME,
                                 '\n',  input$y_variable, ': ', round(df[,2], 0),
                                 #'\n',  input$x_variable, ': ', 
