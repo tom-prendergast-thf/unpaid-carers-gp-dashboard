@@ -7,21 +7,23 @@
 #    http://shiny.rstudio.com/
 #
 
-library(shiny)
-library(tidyverse)
-library(plotly)
-library(aws.s3)
-library(shinydashboard)
-library(leaflet)
-library(sf)
-library(shinydashboardPlus)
-library(htmltools)
+packages <- c('shiny', 'tidyverse', 'plotly', 'aws.s3', 'shinydashboard',
+              'leaflet', 'sf', 'shinydashboardPlus', 'htmltools')
+
+installed_packages <- packages %in% row.names(installed.packages())
+
+if (any(installed_packages == FALSE)){
+  install.packages(packages[!installed_packages])
+}
+
+lapply(packages, library)
 
 ####################
 ##### TO DO ########
 ####################
 
 # ADD UPDATED HEX MAP AND RENAME VARIABLES
+# PLUS FIX HEX MAP
 
 ######################################
 ######## LOAD IN DATA AND CLEAN ######
@@ -42,11 +44,13 @@ hex_map <- s3read_using(read_sf,
               bucket = bucket)
 
 all_variables_renamed <- all_variables_joined %>%
-  rename(`Number of patients registered to missing practices` = MISSING_PATIENTS, 
+  rename(`Total number of unpaid carers (census)` = CENSUS_NO_OF_CARERS,
+         `Estimated number of unpaid carers (GP data)` = EST_CARERS_IN_LA,
+    `Number of patients registered to missing practices` = MISSING_PATIENTS, 
          `Proportion of households subject to 1+ dimensions of deprivation` = PERCENT_DEPRIVATION, 
          `Proportion of carers who are female` = prop_female,
          `Proportion of carers over 65` = prop_over65,
-         `Proportion of carers under 25` = prop_under25, 
+         `Proportio of carers under 25` = prop_under25, 
          `Proportion of carers giving over 50 hours of care per week` = prop_over50hours, 
          `Proportion of carers giving under 9 hours of care per week` = prop_lowintensity)
 
@@ -62,6 +66,9 @@ map_variables_renamed <- map %>%
 LAs_plus <- c('Select All', as.character(sort(unique(map_variables_renamed$LA_NAME))))
 
 LAs_only <- as.character(sort(unique(map_variables_renamed$LA_NAME)))
+
+all_variables_renamed$tooltips <- paste0(all_variables_renamed$LA_NAME,
+                                         '\nCoverage', ': ', round(all_variables_renamed$Coverage, 2))
 
 ########################################################
 #################                        ###############
@@ -96,7 +103,7 @@ ui <-
                   ),
                 
                 fluidRow(
-                  column(2, 
+                  column(3, 
                          selectInput(inputId = 'map_type',
                                      label = 'Map View',
                                      choices = list('Regular view',
@@ -105,9 +112,13 @@ ui <-
                                      label = 'Local Authority',
                                      choices = LAs_plus)
                          ),
-                  column(10, leafletOutput('map1'))
-                )
+                  column(9, leafletOutput('map1'))
+                ),
                 
+                fluidRow(
+                  column(3, h3(strong(textOutput('ICB_text')))),
+                  column(9, plotlyOutput('boxplot1'))
+                )
                 
                 ),
         
@@ -118,7 +129,8 @@ ui <-
                     column(3,
                       selectInput(inputId = 'x_variable',
                                   label = "Select X variable: ",
-                                  choices = list('Number of patients registered to missing practices', 
+                                  choices = list('Total number of unpaid carers (census)',
+                                    'Number of patients registered to missing practices', 
                                                  'Proportion of households subject to 1+ dimensions of deprivation', 
                                                  'Proportion of carers who are female',
                                                  'Proportion of carers over 65',
@@ -143,7 +155,9 @@ ui <-
                 fluidRow(column(3, 
                                 selectInput(inputId = 'hist_variable',
                                             label = "Histogram variable: ",
-                                            choices = list('Coverage', 'Difference', 'Number of patients registered to missing practices', 
+                                            choices = list('Coverage', 'Difference', 'Total number of unpaid carers (census)',
+                                                           'Estimated number of unpaid carers (GP data)',
+                                                           'Number of patients registered to missing practices', 
                                                            'Proportion of households subject to 1+ dimensions of deprivation', 
                                                            'Proportion of carers who are female',
                                                            'Proportion of carers over 65',
@@ -169,7 +183,7 @@ ui <-
 #################                        ###############
 ########################################################
 
-# Define server logic required to draw a histogram
+# Define server 
 server <- function(input, output) {
   
   ## CREATE DYNAMIC DF FOR MAP TAB
@@ -185,7 +199,7 @@ server <- function(input, output) {
   ## MAP TAB: VALUE BOXES
   output$count1 <- renderValueBox({
     number_carers <- filtered_df() %>%
-      summarise(sum(CENSUS_NO_OF_CARERS))
+      summarise(sum(`Total number of unpaid carers (census)`))
     
     valueBox(value = tags$p(paste0(number_carers), style = 'font-size: 50%'), subtitle = 'Number of carers (census)', color = 'green')
   
@@ -194,7 +208,7 @@ server <- function(input, output) {
   output$count2 <- renderValueBox({
     
     GP_carers <- filtered_df() %>%
-      summarise(sum(EST_CARERS_IN_LA))
+      summarise(sum(`Estimated number of unpaid carers (GP data)`))
     
     valueBox(value = tags$p(paste0(round(GP_carers, 0)), style = 'font-size: 50%'), subtitle = 'Number of carers (GP data)', color = 'olive')
   })
@@ -202,7 +216,7 @@ server <- function(input, output) {
   output$count3 <- renderValueBox({
     
     coverage <- filtered_df() %>%
-      summarise(GP = sum(EST_CARERS_IN_LA), Census = sum(CENSUS_NO_OF_CARERS)) %>%
+      summarise(GP = sum(`Estimated number of unpaid carers (GP data)`), Census = sum(`Total number of unpaid carers (census)`)) %>%
       mutate(coverage = GP/Census) %>%
       select(coverage)
     
@@ -222,7 +236,9 @@ server <- function(input, output) {
   
   
   ## MAP TAB: MAPS
+ 
   
+  # Make map-specific reactive datasets and pop-ups 
   filtered_map_df <- reactive({
     map_variables_renamed %>%
       filter(
@@ -244,32 +260,18 @@ server <- function(input, output) {
   hex_map_palette <- reactive({
     colorNumeric('viridis', filtered_hex_map_df()$Coverage)
   })
-  
-  map_popup <- reactive({
-    paste(sep = "<br>",
-          "<b>",map_variables_renamed$LA_NAME,"<b>",
-          "ICB: ", map_variables_renamed$maj_ICB,
-          "Coverage: ", round(map_variables_renamed$Coverage, 2))
-  })
 
-hex_map_popup <- reactive({
-    paste(sep = "<br>",
-          "<b>",hex_map$LAD22NM,"<b>",
-          #"ICB: ", map_variables_renamed$maj_ICB,
-          "Coverage: ", round(hex_map$Coverage, 2))
-  })
-
-map_popup_2 <- reactive({
+map_popup <- reactive({
   paste(sep = "<br>",
-        "<b>",filtered_map_df()$LA_NAME,"<b>",
+        "<b>",filtered_map_df()$LA_NAME,
         "ICB: ", filtered_map_df()$maj_ICB,
         "Coverage: ", round(filtered_map_df()$Coverage, 2))
 })
 
-hex_map_popup_2 <- reactive({
+hex_map_popup <- reactive({
   paste(sep = "<br>",
-        "<b>",filtered_hex_map_df()$LAD22NM,"<b>",
-        #"ICB: ", map_variables_renamed$maj_ICB,
+        "<b>",filtered_hex_map_df()$LAD22NM,
+        #"ICB: ", map_variables_renamed$maj_ICB, "<b>",
         "Coverage: ", round(filtered_hex_map_df()$Coverage, 2))
 })
   
@@ -278,103 +280,119 @@ hex_map_popup_2 <- reactive({
     
     colours_viridis <- colorNumeric(palette = 'viridis', domain = NULL)
   
-    if(input$map_type == 'Regular view' & input$local_authority == 'Select All'){
-        
-        leaflet() %>%
-          addProviderTiles('CartoDB.Positron') %>%
-          addPolygons(
-            data = map_variables_renamed,
-            label = lapply(map_popup(), htmltools::HTML),
-            fillColor = colours_viridis(map_variables_renamed$Coverage),
-            fillOpacity = 1,
-            weight = 1,
-            color = 'black',
-            highlightOptions = highlightOptions(color = 'red')
-          ) %>% 
-          addLegend(
-            pal = colours_viridis,
-            values = map_variables_renamed$Coverage,
-            title = 'Coverage'
-          )
+    if(input$map_type == 'Regular view'){
+      
+      leaflet() %>%
+        addProviderTiles('CartoDB.Positron') %>%
+        setView(lng = 3, lat = 54.3781, zoom = 5) %>%
+      addLegend(
+        pal = colours_viridis,
+        values = map_variables_renamed$Coverage,
+        title = 'Coverage')
     }
-   else if (input$map_type == 'Hex map' & input$local_authority == 'Select All'){
+   else if (input$map_type == 'Hex map'){
      
      leaflet() %>%
-      addProviderTiles('CartoDB.Positron') %>%
-      addPolygons(    
-         data = hex_map,
-         label = lapply(hex_map_popup(), htmltools::HTML),
-         fillColor = colours_viridis(hex_map$Coverage),
-         fillOpacity = 1,
-         weight = 1,
-         color = 'black',
-         highlightOptions = highlightOptions(color = 'red')
-       ) %>% 
+       addProviderTiles('CartoDB.Positron') %>%
+       setView(lng = 3, lat = 54.3781, zoom = 5) %>%
        addLegend(
          pal = colours_viridis,
          values = hex_map$Coverage,
-         title = 'Coverage'
-       )
+         title = 'Coverage')
    }
-   else if(input$map_type == 'Regular view' & input$local_authority != 'Select All'){
-      
-      leaflet() %>%
-        addProviderTiles('CartoDB.Positron') %>%
-        addPolygons(
-          data = map_variables_renamed,
-          fillOpacity = 0.2,
-          weight = 1,
-          color = 'grey'
-        ) %>% 
-        addLegend(
-          pal = colours_viridis,
-          values = map_variables_renamed$Coverage,
-          title = 'Coverage'
-        )
-    }
-    else if (input$map_type == 'Hex map' & input$local_authority != 'Select All'){
-      
-      leaflet() %>%
-        addProviderTiles('CartoDB.Positron') %>%
-        addPolygons(    
-          data = hex_map,
-          fillOpacity = 0.2,
-          weight = 1,
-          color = 'grey'
-        ) %>% 
-        addLegend(
-          pal = colours_viridis,
-          values = hex_map$Coverage,
-          title = 'Coverage'
-        )
-    }
     
   })
   
   observe({
     
+    colours_viridis <- colorNumeric(palette = 'viridis', domain = NULL)
+    
     pal1 <- map_palette()
     pal2 <- hex_map_palette()
     
-    if(input$map_type == 'Regular view' & input$local_authority != 'Select All'){
+    if(input$map_type == 'Regular view'){
       
-      leafletProxy("map1", data = filtered_map_df()) %>%
-        addPolygons(stroke = FALSE,
-                    smoothFactor = 0.2,
+      leafletProxy("map1") %>%
+        clearShapes() %>% 
+        addPolygons(
+          data = map_variables_renamed,
+          fillOpacity = 0.1,
+          color = 'black',
+          weight = 1,
+          highlightOptions = highlightOptions(color = 'black')
+        ) %>% 
+        addPolygons(data = filtered_map_df(),
+                    stroke = FALSE,
                     fillOpacity = 0.8,
-                    popup = map_popup_2(),
-                    color = ~pal1(map_variables_renamed$Coverage))
+                    weight = 0.8,
+                    label = lapply(map_popup(), htmltools::HTML),
+                    popup = map_popup(),
+                    color = ~pal1(filtered_map_df()$Coverage))
+      
     }
-    else if (input$map_type == 'Hex map' & input$local_authority != 'Select All'){
-      leafletProxy("map1", data = filtered_hex_map_df()) %>%
-        addPolygons(stroke = FALSE,
-                    smoothFactor = 0.2,
-                    fillOpacity = 0.8,
-                    popup = hex_map_popup_2(),
-                    color = ~pal2(hex_map$Coverage))
+    else if (input$map_type == 'Hex map'){
+      
+      leafletProxy("map1") %>%
+        clearShapes() %>% 
+        addPolygons(
+          data = hex_map,
+          fillOpacity = 0.1,
+          color = 'black',
+          weight = 1,
+          highlightOptions = highlightOptions(color = 'red')
+        ) %>% 
+        addPolygons(data = filtered_hex_map_df(),
+                    stroke = FALSE,
+                    fillOpacity = 0.9,
+                    weight = 0.9,
+                    label = lapply(hex_map_popup(), htmltools::HTML),
+                    popup = hex_map_popup(),
+                    color = ~pal2(filtered_hex_map_df()$Coverage))
       
     }
     
+    
+  })
+  
+  
+  output$ICB_text <- renderText({
+    if (input$local_authority == 'Select All'){
+      
+    }else{
+      ICB <- filtered_df()$maj_ICB
+      paste0('ICB: ', ICB)
+    } 
+    
+  })
+  
+  output$boxplot1 <- renderPlotly({
+    if (input$local_authority == 'Select All'){
+      
+      
+      ggplotly(ggplot(data = all_variables_renamed, aes(y = Coverage, x = factor(0), text=tooltips)) +
+                 geom_boxplot() + 
+                 geom_point(size = 0.5, color = 'darkblue') +
+                 theme_minimal() +
+                 coord_flip() +
+                 xlab(""),
+               tooltip='text')
+      
+      
+    } else{
+
+      ICB <- filtered_df()$maj_ICB
+      
+      box_df <- all_variables_renamed %>%
+        filter(maj_ICB == ICB)
+        
+      
+      ggplotly(ggplot(data = box_df, aes(y = Coverage, x = factor(0), text=tooltips)) +
+                      geom_boxplot()+
+                      geom_point(size = 2, color = 'darkblue') + 
+                      theme_minimal() +
+                       coord_flip() +
+                 xlab(""),
+               tooltip='text')}
     
   })
   
@@ -383,6 +401,7 @@ hex_map_popup_2 <- reactive({
  ## SCATTER PLOT TAB
   
     output$scatterPlot <- renderPlotly({
+      
         # Create dynamic dataframe which adjusts based on the select input
         df <- all_variables_renamed[,c(input$x_variable, input$y_variable, 'LA_NAME')]
 
